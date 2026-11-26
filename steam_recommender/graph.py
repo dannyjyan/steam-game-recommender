@@ -101,6 +101,47 @@ def search_games(tx, name="", genre=None, max_price=None, min_rating=None, limit
     return result.data()
 
 
+def get_recommendation_data(tx, appid, genre=None, max_price=None, min_rating=None):
+    """Fetch the selected game and every eligible game sharing a scored attribute."""
+    if max_price is not None and (not math.isfinite(max_price) or max_price < 0):
+        raise ValueError("Maximum price must be finite and nonnegative")
+    if min_rating is not None and not 0 <= min_rating <= 100:
+        raise ValueError("Minimum rating must be between 0 and 100")
+    source = tx.run(
+        """
+        MATCH (game:Game {appid: $appid})
+        RETURN game.appid AS appid, game.name AS name,
+               [(game)-[:HAS_TAG]->(tag:Tag) | tag.name] AS tags,
+               [(game)-[:HAS_GENRE]->(genre:Genre) | genre.name] AS genres,
+               [(game)-[:DEVELOPED_BY]->(developer:Developer) | developer.name] AS developers
+        """,
+        appid=appid,
+    ).single()
+    if source is None:
+        raise ValueError("The selected game is no longer in the database")
+    candidates = tx.run(
+        """
+        MATCH (source:Game {appid: $appid})
+              -[:HAS_TAG|HAS_GENRE|DEVELOPED_BY]->(attribute)
+              <-[:HAS_TAG|HAS_GENRE|DEVELOPED_BY]-(game:Game)
+        WHERE game.appid <> $appid
+          AND ($genre IS NULL OR EXISTS {
+              MATCH (game)-[:HAS_GENRE]->(:Genre {name: $genre})
+          })
+          AND ($max_price IS NULL OR game.price <= $max_price)
+          AND ($min_rating IS NULL OR game.pct_pos_total >= $min_rating)
+        WITH DISTINCT game
+        RETURN game.appid AS appid, game.name AS name, game.price AS price,
+               game.pct_pos_total AS rating, game.num_reviews_total AS reviews,
+               [(game)-[:HAS_TAG]->(tag:Tag) | tag.name] AS tags,
+               [(game)-[:HAS_GENRE]->(genre:Genre) | genre.name] AS genres,
+               [(game)-[:DEVELOPED_BY]->(developer:Developer) | developer.name] AS developers
+        """,
+        appid=appid, genre=genre, max_price=max_price, min_rating=min_rating,
+    ).data()
+    return dict(source), candidates
+
+
 def load_games(source: Path) -> list[dict]:
     """Read the prepared file before writing any batches to the database."""
     games = []

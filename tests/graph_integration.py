@@ -4,10 +4,57 @@ import os
 import unittest
 from uuid import uuid4
 
-from steam_recommender.graph import connect, import_batch, list_genres, search_games
+from steam_recommender.graph import connect, get_recommendation_data, import_batch, list_genres, search_games
+from steam_recommender.recommendations import recommend_games
 
 
 class GraphImportTest(unittest.TestCase):
+    def test_recommendations_exclude_self_and_apply_filters_without_losing_attributes(self):
+        token = uuid4().hex
+        appid = int(token[:15], 16)
+        genre, tag, developer, publisher = [f"{label} {token}" for label in ["Genre", "Tag", "Developer", "Publisher"]]
+        source = {
+            "appid": appid, "name": f"Source {token}", "release_date": "2025-01-01",
+            "price": 10, "positive": 8, "negative": 2, "pct_pos_total": 80,
+            "num_reviews_total": 10, "genres": [genre], "tags": {tag: 50},
+            "developers": [developer], "publishers": [publisher],
+        }
+        games = [
+            source,
+            dict(source, appid=appid+1, name="Perfect match", tags={tag: 1}),
+            dict(source, appid=appid+2, name="Free zero-rated", price=0, pct_pos_total=0, tags={}, developers=[]),
+            dict(source, appid=appid+3, name="Unknown rating", price=0, pct_pos_total=None, num_reviews_total=None),
+            dict(source, appid=appid+4, name="Expensive", price=20),
+            dict(source, appid=appid+5, name="Publisher only", genres=[], tags={}, developers=[]),
+        ]
+        with connect() as driver:
+            with driver.session(database=os.environ["NEO4J_DATABASE"]) as session:
+                with session.begin_transaction() as tx:
+                    existing = tx.run(
+                        "MATCH (g:Game) WHERE g.appid IN $ids RETURN count(g) AS count",
+                        ids=[game["appid"] for game in games],
+                    ).single()["count"]
+                    self.assertEqual(existing, 0)
+                    try:
+                        import_batch(tx, games)
+                        selected, candidates = get_recommendation_data(tx, appid)
+                        self.assertEqual({game["appid"] for game in candidates}, {appid+1, appid+2, appid+3, appid+4})
+                        self.assertEqual(len(candidates), 4)
+                        selected, filtered = get_recommendation_data(tx, appid, genre=genre, max_price=10, min_rating=80)
+                        ranked = recommend_games(selected, filtered)
+                        self.assertEqual([game["appid"] for game in ranked], [appid+1])
+                        self.assertEqual(ranked[0]["score"], 100)
+                        _, free = get_recommendation_data(tx, appid, max_price=0)
+                        self.assertEqual({game["appid"] for game in free}, {appid+2, appid+3})
+                        _, rated_free = get_recommendation_data(tx, appid, max_price=0, min_rating=0)
+                        self.assertEqual([game["appid"] for game in rated_free], [appid+2])
+                        _, wrong_genre = get_recommendation_data(tx, appid, genre=f"Missing {token}")
+                        self.assertEqual(wrong_genre, [])
+                        sparse_source, sparse_candidates = get_recommendation_data(tx, appid+5)
+                        self.assertEqual(recommend_games(sparse_source, sparse_candidates), [])
+                    finally:
+                        tx.rollback()
+
     def test_search_combines_filters_and_distinguishes_unknown_from_zero(self):
         token = uuid4().hex
         appid = int(token[:15], 16)

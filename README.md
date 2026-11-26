@@ -16,12 +16,17 @@ Use Python 3.12. From the repository root:
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements.txt
-python -m streamlit run app.py
 ```
 
 The app searches the imported Neo4j catalog. Keep your instance running and
 configure `.env`, then preprocess and import the data using the commands below
-before opening the app. Similarity recommendations are not implemented yet.
+before opening the app. On a fresh checkout, follow [Data and database](#data-and-database)
+and [Import into Neo4j](#import-into-neo4j) first; the datasets and credentials are
+local and are not downloaded with the repository. Then launch:
+
+```bash
+python -m streamlit run app.py
+```
 
 Search matches part of a game name regardless of capitalization. Genre, maximum
 price, and minimum positive-review percentage filters combine with the name
@@ -32,6 +37,60 @@ leaving it blank includes them. Click **Search** to apply changes.
 Results show up to 50 games, ordered by total review count (highest first), then
 name and game ID for stable ordering. Narrow the filters if more than 50 match.
 Prices and reviews reflect the dataset snapshot, not current Steam store data.
+
+## Similarity recommendations
+
+Choose a game from **Find games similar to** below the search results. The app
+finds games connected through shared tags, genres, or developers and shows the
+top 10 matches. Submitted genre, price, and rating filters also apply to these
+candidates; the name search only applies when finding the starting game.
+
+For each attribute type, Jaccard similarity is the number of shared values divided
+by the number of distinct values across both games. The score out of 100 is:
+
+```text
+60 × tag similarity + 30 × genre similarity + 10 × developer similarity
+```
+
+The weights are initial project choices, not learned preferences. Empty unions
+contribute zero; missing attributes do not cause the remaining weights to be
+rescaled. Tag votes and publishers do not affect this initial score. Prices and
+ratings filter candidates rather than contribute points.
+
+All eligible candidates are scored before selecting the top 10. The selected game
+and zero-overlap games are excluded. Ties use review count (descending), name,
+then app ID. Expand a result to see its shared attributes, overlap counts, and
+score contributions. Scores measure attribute overlap, not a probability of
+enjoyment. Recommendations cover only the imported sample.
+
+## Demo walkthrough
+
+These examples are present in the default 10,000-game sample:
+
+1. Leave genre, price, and rating unrestricted. Search for `HELLDIVERS`, select
+   `HELLDIVERS™ 2` (553850), and expand its first recommendation. The original
+   `HELLDIVERS™ Dive Harder Edition` scores about 57.4/100. Explain the shared
+   attributes and their separate contributions.
+2. Search for `Darkest Dungeon` (262060) or `MiSide` (2527500) to show a different
+   set of recommendations. The name search finds the starting game; recommended
+   titles do not need to contain the same words.
+3. Clear the name, choose Action, set maximum price to 0 and minimum positive
+   reviews to 80, then click Search. Select one of the results and check that its
+   recommendations are also free, Action games with at least 80% positive reviews.
+4. Clear all filters and search for `Dark Man` (949720). This game has no scored
+   attributes in the sample, so the app explains the missing data and returns no
+   similar games instead of inventing matches.
+
+On November 26, 2026, rankings, candidate counts, and explanation attributes for
+these four starting games were checked against an independent calculation over
+the complete processed sample, both without filters and with price <= 20 and
+rating >= 80. All eight distinct cases matched. This checks implementation
+correctness, not whether players would enjoy the recommendations.
+
+Before presenting, review the top results for several games you know. Consider
+whether the shared tags explain meaningful gameplay similarity and whether the
+fixed weights need adjustment. The dataset is a historical sample; missing games,
+missing attributes, and broad genres limit what the recommender can infer.
 
 ## Structure
 
@@ -96,7 +155,7 @@ With Neo4j running and `.env` configured, run the database integration tests:
 python -m unittest discover -s tests -p '*integration.py'
 ```
 
-They check imports, updates, and combined search filters against the real
+They check imports, updates, search filters, and recommendation candidates against the real
 database. Their temporary graph changes are rolled back.
 
 The graph contains `Game`, `Genre`, `Tag`, `Developer`, and `Publisher`

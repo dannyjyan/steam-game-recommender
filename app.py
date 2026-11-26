@@ -6,7 +6,8 @@ import os
 import streamlit as st
 from neo4j.exceptions import DriverError, Neo4jError
 
-from steam_recommender.graph import connect, list_genres, search_games
+from steam_recommender.graph import connect, get_recommendation_data, list_genres, search_games
+from steam_recommender.recommendations import WEIGHTS, recommend_games
 
 
 @st.cache_resource
@@ -16,7 +17,7 @@ def get_driver():
 
 st.set_page_config(page_title="Steam Game Recommender", page_icon="🎮", layout="wide")
 st.title("Steam Game Recommender")
-st.write("Search games by name, genre, price, and player reviews.")
+st.write("Find a game you enjoy, then discover similar games with explanations for each match.")
 
 try:
     driver = get_driver()
@@ -72,3 +73,51 @@ else:
     ]
     st.dataframe(rows, hide_index=True, width="stretch")
     st.caption("Prices and reviews reflect the March 2025 dataset. Unknown ratings are not treated as 0%.")
+
+    st.subheader("Similar games")
+    game_names = {game["appid"]: game["name"] for game in games[:50]}
+    if st.session_state.get("selected_game") not in game_names:
+        st.session_state["selected_game"] = None
+    selected = st.selectbox(
+        "Find games similar to", list(game_names), index=None, key="selected_game",
+        placeholder="Choose a game from your search results",
+        format_func=lambda appid: f"{game_names[appid]} (App ID {appid})",
+    )
+    st.caption("Recommendations use your submitted genre, price, and rating filters. The name search only finds the starting game.")
+    if selected is not None:
+        try:
+            with st.spinner("Finding similar games…"):
+                with driver.session(database=os.environ["NEO4J_DATABASE"]) as session:
+                    source, candidates = session.execute_read(
+                        get_recommendation_data, selected, genre=genre,
+                        max_price=max_price, min_rating=min_rating,
+                    )
+                recommendations = recommend_games(source, candidates)
+        except (DriverError, Neo4jError, OSError, ValueError):
+            logging.getLogger(__name__).exception("Could not load similar games")
+            st.error("Could not load recommendations. Check your database connection and search again.")
+            st.stop()
+
+        st.caption("Similarity: tags up to 60 points, genres up to 30, developers up to 10. Scores measure overlap, not the probability you will enjoy a game.")
+        if any(not source[field] for field in WEIGHTS):
+            st.info("This game has incomplete attribute data. Missing attributes contribute no similarity points, so scores may be lower.")
+        if not recommendations:
+            st.info("No similar games match these filters. Try fewer filters or choose another starting game.")
+        else:
+            st.write(f"Top {len(recommendations)} matches")
+            for rank, game in enumerate(recommendations, start=1):
+                with st.expander(f"{rank}. {game['name']} — {game['score']:.1f}/100"):
+                    price = "Unknown" if game["price"] is None else ("Free" if game["price"] == 0 else f"{game['price']:.2f}")
+                    rating = "Unknown" if game["rating"] is None else f"{game['rating']}%"
+                    st.write(f"Price: {price} · Positive reviews: {rating}")
+                    st.dataframe([
+                        {
+                            "Attribute": field.capitalize(),
+                            "Shared": ", ".join(part["shared"]) or "None",
+                            "Shared / combined distinct": f"{len(part['shared'])} / {part['union_count']}",
+                            "Points": round(part["points"], 2),
+                            "Maximum points": WEIGHTS[field],
+                        }
+                        for field, part in game["breakdown"].items()
+                    ], hide_index=True, width="stretch")
+                    st.caption("Each contribution is shared ÷ combined distinct attributes × maximum points. An empty attribute set contributes 0. Displayed values are rounded.")
