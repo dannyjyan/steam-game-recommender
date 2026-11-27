@@ -113,8 +113,9 @@ Add focused tests as behavior is implemented.
 
 ## Data and database
 
-Place the Steam Game Dataset 2025 CSV from Kaggle in `data/raw/`. Use the March
-2025 cleaned file; the supplied copy contains 89,618 games with unique IDs.
+Download the [Steam Games Dataset from Kaggle](https://www.kaggle.com/datasets/artermiloff/steam-games-dataset?resource=download)
+and extract it into `data/raw/`. Use `games_march2025_cleaned.csv`; the supplied
+copy contains 89,618 games with unique IDs.
 From the repository root, run:
 
 ```bash
