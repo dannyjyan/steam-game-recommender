@@ -27,6 +27,13 @@ class GraphImportTest(unittest.TestCase):
             dict(source, appid=appid+4, name="Expensive", price=20),
             dict(source, appid=appid+5, name="Publisher only", genres=[], tags={}, developers=[]),
         ]
+        hidden_genre = f"Hidden genre {token}"
+        for offset, excluded_tag in enumerate(["Sexual Content", "Nudity", "Hentai", "NSFW"], start=6):
+            games.append(dict(
+                source, appid=appid+offset, name=f"Hidden {token} {offset}",
+                tags={tag: 1, excluded_tag: 1}, genres=[genre, hidden_genre],
+            ))
+        games[2]["tags"] = {"Mature": 1}
         with connect() as driver:
             with driver.session(database=os.environ["NEO4J_DATABASE"]) as session:
                 with session.begin_transaction() as tx:
@@ -37,6 +44,12 @@ class GraphImportTest(unittest.TestCase):
                     self.assertEqual(existing, 0)
                     try:
                         import_batch(tx, games)
+                        self.assertEqual(search_games(tx, name=f"Hidden {token}"), [])
+                        self.assertNotIn(hidden_genre, list_genres(tx))
+                        self.assertIn(appid+2, [game["appid"] for game in search_games(tx, genre=genre)])
+                        for hidden in games[6:]:
+                            with self.assertRaisesRegex(ValueError, "excluded by the content filter"):
+                                get_recommendation_data(tx, hidden["appid"])
                         selected, candidates = get_recommendation_data(tx, appid)
                         self.assertEqual({game["appid"] for game in candidates}, {appid+1, appid+2, appid+3, appid+4})
                         self.assertEqual(len(candidates), 4)

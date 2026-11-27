@@ -38,6 +38,12 @@ Results show up to 50 games, ordered by total review count (highest first), then
 name and game ID for stable ordering. Narrow the filters if more than 50 match.
 Prices and reviews reflect the dataset snapshot, not current Steam store data.
 
+Games tagged `Sexual Content`, `Nudity`, `Hentai`, or `NSFW` are hidden from search
+and recommendations, including selection as a starting game. Genre choices also
+exclude genres found only on hidden games. This is a tag-based filter; untagged
+content cannot be identified by it. `Mature` and violence-related tags are not
+excluded. The source files and Neo4j records remain intact; no reimport is needed.
+
 ## Similarity recommendations
 
 Choose a game from **Find games similar to** below the search results. The app

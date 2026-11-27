@@ -10,6 +10,9 @@ from dotenv import load_dotenv
 from neo4j import GraphDatabase
 
 
+EXCLUDED_TAGS = ["Sexual Content", "Nudity", "Hentai", "NSFW"]
+
+
 IMPORT_QUERY = """
 UNWIND $games AS row
 MERGE (game:Game {appid: row.appid})
@@ -61,8 +64,11 @@ def connect():
 def list_genres(tx):
     """List genres attached to games, excluding unused attribute nodes."""
     return [record["name"] for record in tx.run(
-        "MATCH (:Game)-[:HAS_GENRE]->(genre:Genre) "
-        "RETURN DISTINCT genre.name AS name ORDER BY name"
+        "MATCH (game:Game)-[:HAS_GENRE]->(genre:Genre) "
+        "WHERE NOT EXISTS { MATCH (game)-[:HAS_TAG]->(tag:Tag) "
+        "WHERE tag.name IN $excluded_tags } "
+        "RETURN DISTINCT genre.name AS name ORDER BY name",
+        excluded_tags=EXCLUDED_TAGS,
     )]
 
 
@@ -78,6 +84,9 @@ def search_games(tx, name="", genre=None, max_price=None, min_rating=None, limit
         """
         MATCH (game:Game)
         WHERE toLower(game.name) CONTAINS toLower($name)
+          AND NOT EXISTS {
+              MATCH (game)-[:HAS_TAG]->(tag:Tag) WHERE tag.name IN $excluded_tags
+          }
           AND ($genre IS NULL OR EXISTS {
               MATCH (game)-[:HAS_GENRE]->(:Genre {name: $genre})
           })
@@ -96,7 +105,7 @@ def search_games(tx, name="", genre=None, max_price=None, min_rating=None, limit
         ORDER BY coalesce(reviews, -1) DESC, toLower(name), appid
         """,
         name=name.strip(), genre=genre, max_price=max_price,
-        min_rating=min_rating, limit=limit,
+        min_rating=min_rating, limit=limit, excluded_tags=EXCLUDED_TAGS,
     )
     return result.data()
 
@@ -110,21 +119,27 @@ def get_recommendation_data(tx, appid, genre=None, max_price=None, min_rating=No
     source = tx.run(
         """
         MATCH (game:Game {appid: $appid})
+        WHERE NOT EXISTS {
+            MATCH (game)-[:HAS_TAG]->(tag:Tag) WHERE tag.name IN $excluded_tags
+        }
         RETURN game.appid AS appid, game.name AS name,
                [(game)-[:HAS_TAG]->(tag:Tag) | tag.name] AS tags,
                [(game)-[:HAS_GENRE]->(genre:Genre) | genre.name] AS genres,
                [(game)-[:DEVELOPED_BY]->(developer:Developer) | developer.name] AS developers
         """,
-        appid=appid,
+        appid=appid, excluded_tags=EXCLUDED_TAGS,
     ).single()
     if source is None:
-        raise ValueError("The selected game is no longer in the database")
+        raise ValueError("The selected game is unavailable or excluded by the content filter")
     candidates = tx.run(
         """
         MATCH (source:Game {appid: $appid})
               -[:HAS_TAG|HAS_GENRE|DEVELOPED_BY]->(attribute)
               <-[:HAS_TAG|HAS_GENRE|DEVELOPED_BY]-(game:Game)
         WHERE game.appid <> $appid
+          AND NOT EXISTS {
+              MATCH (game)-[:HAS_TAG]->(tag:Tag) WHERE tag.name IN $excluded_tags
+          }
           AND ($genre IS NULL OR EXISTS {
               MATCH (game)-[:HAS_GENRE]->(:Genre {name: $genre})
           })
@@ -138,6 +153,7 @@ def get_recommendation_data(tx, appid, genre=None, max_price=None, min_rating=No
                [(game)-[:DEVELOPED_BY]->(developer:Developer) | developer.name] AS developers
         """,
         appid=appid, genre=genre, max_price=max_price, min_rating=min_rating,
+        excluded_tags=EXCLUDED_TAGS,
     ).data()
     return dict(source), candidates
 
